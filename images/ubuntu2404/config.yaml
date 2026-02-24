@@ -1,0 +1,74 @@
+# Ubuntu 24.04 (Noble) 基础镜像配置
+name: ubuntu2404-base
+description: Ubuntu 24.04 LTS (Noble) 基础镜像
+version: "1.0.0"
+
+source:
+  amd64: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  arm64: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
+
+disk:
+  size: 10G
+
+settings:
+  timezone: Asia/Shanghai
+  locale: en_US.UTF-8
+  hostname: ubuntu2404
+
+apt:
+  mirror: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+  security: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
+
+packages:
+  - vim
+  - curl
+  - wget
+  - git
+  - htop
+  - tmux
+  - net-tools
+  - ca-certificates
+  - gnupg
+  - qemu-guest-agent
+  - cloud-guest-utils
+  - socat
+  - jq
+  - tree
+  - bash-completion
+  - lsof
+  - netcat-openbsd
+  - ethtool
+  - iptables
+
+users:
+  - name: root
+    password_env: ROOT_PASSWORD
+  - name: ubuntu
+    password_env: ROOT_PASSWORD
+    sudo: NOPASSWD:ALL
+    ssh_key_env: SSH_PUBLIC_KEY
+
+ssh:
+  password_auth: true
+  root_login: true
+
+files:
+  - path: /etc/motd
+    content: |
+      ╔═══════════════════════════════════════════════════════════╗
+      ║     Ubuntu 24.04 LTS (Noble) - Gclm Team                  ║
+      ╚═══════════════════════════════════════════════════════════╝
+    permissions: "0644"
+
+  - path: /etc/sysctl.d/99-custom.conf
+    content: |
+      net.ipv4.ip_forward=0
+      net.ipv6.conf.all.disable_ipv6=1
+      fs.inotify.max_user_instances=512
+      fs.inotify.max_user_watches=262144
+    permissions: "0644"
+
+commands:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - update-alternatives --set editor /usr/bin/vim.basic

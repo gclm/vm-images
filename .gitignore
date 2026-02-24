@@ -1,0 +1,23 @@
+# 环境变量
+.env
+
+# 缓存和输出
+.cache/
+output/
+
+# 镜像文件
+*.qcow2
+*.img
+*.iso
+*.sha256
+
+# 临时文件
+*.tmp
+*.log
+*.swp
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace

@@ -1,0 +1,70 @@
+# Rocky Linux 10 基础镜像配置
+name: rocky10-base
+description: Rocky Linux 10 基础镜像
+version: "1.0.0"
+
+source:
+  amd64: https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
+  arm64: https://dl.rockylinux.org/pub/rocky/10/images/aarch64/Rocky-10-GenericCloud-Base.latest.aarch64.qcow2
+
+disk:
+  size: 10G
+
+settings:
+  timezone: Asia/Shanghai
+  locale: en_US.UTF-8
+  hostname: rocky10
+
+dnf:
+  mirror: https://mirrors.tuna.tsinghua.edu.cn/rocky
+
+packages:
+  - vim-enhanced
+  - curl
+  - wget
+  - git
+  - htop
+  - tmux
+  - net-tools
+  - qemu-guest-agent
+  - cloud-utils-growpart
+  - socat
+  - jq
+  - tree
+  - bash-completion
+  - lsof
+  - nmap-ncat
+  - ethtool
+  - iptables
+
+users:
+  - name: root
+    password_env: ROOT_PASSWORD
+  - name: rocky
+    password_env: ROOT_PASSWORD
+    sudo: NOPASSWD:ALL
+    ssh_key_env: SSH_PUBLIC_KEY
+
+ssh:
+  password_auth: true
+  root_login: true
+
+files:
+  - path: /etc/motd
+    content: |
+      ╔═══════════════════════════════════════════════════════════╗
+      ║        Rocky Linux 10 - Gclm Team                         ║
+      ╚═══════════════════════════════════════════════════════════╝
+    permissions: "0644"
+
+  - path: /etc/sysctl.d/99-custom.conf
+    content: |
+      net.ipv4.ip_forward=0
+      net.ipv6.conf.all.disable_ipv6=1
+      fs.inotify.max_user_instances=512
+      fs.inotify.max_user_watches=262144
+    permissions: "0644"
+
+commands:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
