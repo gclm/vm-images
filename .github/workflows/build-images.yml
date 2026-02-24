@@ -108,8 +108,8 @@ jobs:
         run: |
           # 设置使用 direct backend (GitHub Actions 不支持 KVM)
           export LIBGUESTFS_BACKEND=direct
-          # 使用 TCG 模式，禁用 passt（passt 在 sudo 下有权限问题）
-          export LIBGUESTFS_BACKEND_SETTINGS=force_tcg
+          # 使用 TCG 模式，强制使用 slirp 而不是 passt
+          export LIBGUESTFS_BACKEND_SETTINGS=force_tcg,network_backend=slirp
           # 设置缓存目录到 root 可访问的位置
           export LIBGUESTFS_CACHEDIR=/tmp/libguestfs
           mkdir -p /tmp/libguestfs
@@ -126,7 +126,7 @@ jobs:
           lsmod | grep -E "kvm|tun" || echo "No KVM/tun modules loaded"
           echo "=== Pre-build libguestfs appliance ==="
           # 手动触发 appliance 构建，避免首次运行时超时
-          sudo LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg LIBGUESTFS_CACHEDIR=/tmp/libguestfs guestfish -- /bin/true 2>&1 | head -50 || true
+          sudo LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg,network_backend=slirp LIBGUESTFS_CACHEDIR=/tmp/libguestfs guestfish -- /bin/true 2>&1 | head -50 || true
           echo "=== Run libguestfs-test-tool ==="
           sudo libguestfs-test-tool 2>&1 | tail -20
 
@@ -147,7 +147,8 @@ jobs:
           BUILD_IMAGE: ${{ matrix.image }}
           BUILD_ARCH: ${{ matrix.arch }}
           LIBGUESTFS_BACKEND: direct
-          LIBGUESTFS_BACKEND_SETTINGS: force_tcg
+          # 强制使用 slirp 而不是 passt (passt 在 GitHub Actions 上有权限问题)
+          LIBGUESTFS_BACKEND_SETTINGS: force_tcg,network_backend=slirp
           LIBGUESTFS_CACHEDIR: /tmp/libguestfs
           LIBGUESTFS_DEBUG: 1
           LIBGUESTFS_TRACE: 1
