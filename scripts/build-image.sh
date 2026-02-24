@@ -259,9 +259,9 @@ build_image() {
         customize_args+=("--run-command" "$cmd")
     done
 
-    # 执行 virt-customize
+    # 执行 virt-customize (使用 sudo 确保一致的权限上下文)
     log_info "定制镜像中..."
-    virt-customize "${customize_args[@]}"
+    sudo virt-customize "${customize_args[@]}"
 
     # 压缩镜像
     log_info "压缩镜像..."
