@@ -94,7 +94,13 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt update
+          # 安装 libguestfs 及其依赖
           sudo apt install -y qemu-utils libguestfs-tools
+          # 安装可能的额外依赖（supermin 构建 appliance 需要）
+          sudo apt install -y linux-headers-generic build-essential
+          # 确保 /boot 权限正确（supermin 需要读取内核）
+          sudo chmod 0644 /boot/vmlinuz* 2>/dev/null || true
+          # 安装 yq
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
@@ -111,11 +117,14 @@ jobs:
           echo "=== supermin version ==="
           supermin --version
           echo "=== libguestfs version ==="
-            guestfish --version | head -1
+          guestfish --version | head -1
           echo "=== Check kernel modules ==="
           lsmod | grep -E "kvm|tun" || echo "No KVM/tun modules loaded"
+          echo "=== Pre-build libguestfs appliance ==="
+          # 手动触发 appliance 构建，避免首次运行时超时
+          sudo LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg guestfish -- /bin/true 2>&1 | head -50 || true
           echo "=== Run libguestfs-test-tool ==="
-          sudo libguestfs-test-tool || true
+          sudo libguestfs-test-tool 2>&1 | tail -20
 
       - name: Check secrets
         run: |
