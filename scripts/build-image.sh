@@ -13,6 +13,7 @@ set -e
 #   SSH_PUBLIC_KEY - SSH 公钥 (必填)
 #   ROOT_PASSWORD  - root 密码 (必填)
 #   OUTPUT_DIR     - 输出目录 (默认: ./output)
+#   LIBGUESTFS_BACKEND - libguestfs 后端 (默认: direct)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
@@ -63,6 +64,10 @@ if [ -f "${PROJECT_DIR}/.env" ]; then
     source "${PROJECT_DIR}/.env"
     set +a
 fi
+
+# 设置 libguestfs 后端 (GitHub Actions 不支持 KVM)
+export LIBGUESTFS_BACKEND="${LIBGUESTFS_BACKEND:-direct}"
+log_info "使用 libguestfs backend: ${LIBGUESTFS_BACKEND}"
 
 # 检查环境变量
 if [ -z "$SSH_PUBLIC_KEY" ]; then

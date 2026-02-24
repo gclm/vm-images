@@ -98,6 +98,13 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      - name: Initialize libguestfs
+        run: |
+          # 设置使用 direct backend (GitHub Actions 不支持 KVM)
+          export LIBGUESTFS_BACKEND=direct
+          # 预初始化 libguestfs appliance
+          sudo libguestfs-make-kernel-groups || true
+
       - name: Check secrets
         run: |
           if [ -z "$SSH_PUBLIC_KEY" ]; then
@@ -114,6 +121,7 @@ jobs:
         env:
           BUILD_IMAGE: ${{ matrix.image }}
           BUILD_ARCH: ${{ matrix.arch }}
+          LIBGUESTFS_BACKEND: direct
         run: |
           chmod +x scripts/build-image.sh
           ./scripts/build-image.sh "$BUILD_IMAGE" "$BUILD_ARCH"
