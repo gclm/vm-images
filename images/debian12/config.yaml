@@ -16,8 +16,8 @@ settings:
   hostname: debian12
 
 apt:
-  mirror: https://mirrors.tuna.tsinghua.edu.cn/debian
-  security: https://mirrors.tuna.tsinghua.edu.cn/debian-security
+  mirror: null
+  security: null
 
 packages:
   - vim

@@ -180,22 +180,25 @@ build_image() {
         # APT 镜像源 - Debian 12 cloud 镜像使用 /etc/apt/mirrors/ 格式
         if [ -n "$APT_MIRROR" ] && [ "$APT_MIRROR" != "null" ]; then
             customize_args+=(
-                # 配置 DNS 以确保可以解析域名
-                "--run-command" "echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true"
-                "--run-command" "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null || true"
+                # 备份旧的 sources 文件
+                "--run-command" "mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true"
                 # 直接写入新的 mirror list (Debian 12 cloud 格式)
                 "--run-command" "echo 'deb ${APT_MIRROR} bookworm main contrib non-free non-free-firmware' > /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "echo 'deb ${APT_MIRROR} bookworm-updates main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "echo 'deb ${APT_MIRROR} bookworm-backports main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "echo 'deb ${APT_MIRROR}-security bookworm-security main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
-                # 备份旧的 mirror list 文件
-                "--run-command" "mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true"
                 "--run-command" "apt-get update || true"  # 更新包列表
             )
         else
-            # 没有 mirror 配置时，配置 DNS 并更新
+            # 没有 mirror 配置时，使用默认官方源并禁用 mirror list
             customize_args+=(
-                "--run-command" "echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true"
+                # 备份旧的 sources 文件
+                "--run-command" "mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true"
+                # 写入官方源
+                "--run-command" "echo 'deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware' > /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb http://deb.debian.org/debian bookworm-backports main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "apt-get update || true"
             )
         fi
