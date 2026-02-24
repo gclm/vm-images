@@ -183,7 +183,11 @@ build_image() {
                 "--run-command" "sed -i 's|http://deb.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "sed -i 's|http://security.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "sed -i 's|http://archive.ubuntu.com|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "apt-get update || true"  # 更新包列表
             )
+        else
+            # 没有 mirror 配置时也需要更新
+            customize_args+=("--run-command" "apt-get update || true")
         fi
     else
         # RHEL 系列
