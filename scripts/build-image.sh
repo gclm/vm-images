@@ -67,7 +67,9 @@ fi
 
 # 设置 libguestfs 后端 (GitHub Actions 不支持 KVM)
 export LIBGUESTFS_BACKEND="${LIBGUESTFS_BACKEND:-direct}"
+export LIBGUESTFS_BACKEND_SETTINGS="${LIBGUESTFS_BACKEND_SETTINGS:-force_tcg}"
 log_info "使用 libguestfs backend: ${LIBGUESTFS_BACKEND}"
+log_info "使用 backend settings: ${LIBGUESTFS_BACKEND_SETTINGS}"
 
 # 检查环境变量
 if [ -z "$SSH_PUBLIC_KEY" ]; then
