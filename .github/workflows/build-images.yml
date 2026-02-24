@@ -103,7 +103,18 @@ jobs:
           # 设置使用 direct backend (GitHub Actions 不支持 KVM)
           export LIBGUESTFS_BACKEND=direct
           export LIBGUESTFS_BACKEND_SETTINGS=force_tcg
-          # 验证 libguestfs 安装
+          # 诊断信息
+          echo "=== Kernel Version ==="
+          uname -r
+          echo "=== SELinux Status ==="
+          getenforce 2>/dev/null || echo "SELinux not installed"
+          echo "=== supermin version ==="
+          supermin --version
+          echo "=== libguestfs version ==="
+            guestfish --version | head -1
+          echo "=== Check kernel modules ==="
+          lsmod | grep -E "kvm|tun" || echo "No KVM/tun modules loaded"
+          echo "=== Run libguestfs-test-tool ==="
           sudo libguestfs-test-tool || true
 
       - name: Check secrets
@@ -124,6 +135,8 @@ jobs:
           BUILD_ARCH: ${{ matrix.arch }}
           LIBGUESTFS_BACKEND: direct
           LIBGUESTFS_BACKEND_SETTINGS: force_tcg
+          LIBGUESTFS_DEBUG: 1
+          LIBGUESTFS_TRACE: 1
         run: |
           chmod +x scripts/build-image.sh
           ./scripts/build-image.sh "$BUILD_IMAGE" "$BUILD_ARCH"
