@@ -205,8 +205,11 @@ build_image() {
         customize_args+=("--hostname" "$HOSTNAME")
     fi
 
-    # 设置 root 密码
-    customize_args+=("--root-password" "password:${ROOT_PASSWORD}")
+    # 设置 root 密码 (使用文件避免特殊字符问题)
+    local root_password_file=$(mktemp)
+    echo -n "$ROOT_PASSWORD" > "$root_password_file"
+    customize_args+=("--root-password" "file:${root_password_file}")
+    tmp_files+=("$root_password_file")
 
     # 创建用户并设置密码和 SSH 密钥
     local first_user=$(yq '.users[] | select(.name != "root") | .name' "$config_path" | head -1)
@@ -217,7 +220,11 @@ build_image() {
             # RHEL 使用 wheel 组
             customize_args+=("--run-command" "useradd -m -s /bin/bash -G wheel ${first_user} 2>/dev/null || true")
         fi
-        customize_args+=("--password" "${first_user}:${ROOT_PASSWORD}")
+        # 使用密码文件避免特殊字符问题
+        local user_password_file=$(mktemp)
+        echo -n "$ROOT_PASSWORD" > "$user_password_file"
+        customize_args+=("--password" "${first_user}:file:${user_password_file}")
+        tmp_files+=("$user_password_file")
         customize_args+=("--ssh-inject" "${first_user}:string:${SSH_PUBLIC_KEY}")
     fi
 
