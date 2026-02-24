@@ -33,6 +33,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Detect images and architectures
         id: detect
         env:
@@ -40,34 +45,38 @@ jobs:
           INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
           # 获取镜像列表
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
             images="$INPUT_IMAGE"
           else
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
 
           # 获取架构列表
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_ARCH" != "all" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_ARCH" != "all" ] && [ -n "$INPUT_ARCH" ]; then
             archs="$INPUT_ARCH"
           else
             archs="amd64 arm64"
           fi
 
+          echo "Images: $images"
+          echo "Archs: $archs"
+
           # 生成矩阵
           matrix='{"include":[]}'
           for img in $images; do
             for arch in $archs; do
-              # 检查配置文件是否存在该架构
               config="images/${img}/config.yaml"
               if [ -f "$config" ]; then
                 url=$(yq ".source.${arch}" "$config" 2>/dev/null)
                 if [ -n "$url" ] && [ "$url" != "null" ]; then
-                  matrix=$(echo "$matrix" | jq --arg img "$img" --arg arch "$arch" '.include += [{"image": $img, "arch": $arch}]')
+                  matrix=$(echo "$matrix" | jq -c --arg img "$img" --arg arch "$arch" '.include += [{"image": $img, "arch": $arch}]')
                 fi
               fi
             done
           done
 
+          # 压缩为单行输出
+          matrix=$(echo "$matrix" | jq -c .)
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
           echo "Detected matrix:"
           echo "$matrix" | jq .
