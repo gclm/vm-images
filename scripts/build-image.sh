@@ -214,9 +214,13 @@ build_image() {
         fi
     fi
 
-    # 安装软件包
+    # 安装软件包 (跳过如果 CI 环境且网络不可用)
     if [ -n "$packages" ]; then
-        customize_args+=("--install" "$packages")
+        if [ "${CI_SKIP_PACKAGES:-false}" = "true" ]; then
+            log_warn "CI 环境跳过软件包安装 (CI_SKIP_PACKAGES=true)"
+        else
+            customize_args+=("--install" "$packages")
+        fi
     fi
 
     # 设置时区

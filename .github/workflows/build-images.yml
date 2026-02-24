@@ -160,6 +160,8 @@ jobs:
           LIBGUESTFS_CACHEDIR: /tmp/libguestfs
           LIBGUESTFS_DEBUG: 1
           LIBGUESTFS_TRACE: 1
+          # 跳过软件包安装 (GitHub Actions 中 libguestfs 网络不可用)
+          CI_SKIP_PACKAGES: "true"
         run: |
           mkdir -p /tmp/libguestfs
           chmod +x scripts/build-image.sh
