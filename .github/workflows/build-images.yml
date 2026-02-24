@@ -44,11 +44,11 @@ jobs:
           INPUT_IMAGE: ${{ github.event.inputs.image }}
           INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
-          # 获取镜像列表（push 事件默认只测试 debian13，加快 CI 速度）
+          # 获取镜像列表（push 事件默认只测试 debian12，trixie 包不可用问题）
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
             images="$INPUT_IMAGE"
           elif [ "${{ github.event_name }}" = "push" ]; then
-            images="debian13"  # 默认只测试 debian13
+            images="debian12"  # debian13 (trixie) 部分包不可用，使用 debian12 (bookworm)
           else
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
