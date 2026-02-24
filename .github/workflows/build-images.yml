@@ -94,7 +94,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt update
-          sudo apt install -y qemu-utils libguestfs-tools libguestfs-appliance
+          sudo apt install -y qemu-utils libguestfs-tools
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
@@ -102,8 +102,7 @@ jobs:
         run: |
           # 设置使用 direct backend (GitHub Actions 不支持 KVM)
           export LIBGUESTFS_BACKEND=direct
-          # 更新 guestfs appliance
-          sudo update-guestfs-appliance 2>/dev/null || true
+          export LIBGUESTFS_BACKEND_SETTINGS=force_tcg
           # 验证 libguestfs 安装
           sudo libguestfs-test-tool || true
 
