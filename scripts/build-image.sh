@@ -177,19 +177,19 @@ build_image() {
     if [ "$OS_FAMILY" = "debian" ]; then
         customize_args+=("--run-command" "dpkg --configure -a || true")
 
-        # APT 镜像源 - 需要同时匹配 http:// 和 https://
+        # APT 镜像源 - Debian 12 cloud 镜像使用 /etc/apt/mirrors/ 格式
         if [ -n "$APT_MIRROR" ] && [ "$APT_MIRROR" != "null" ]; then
             customize_args+=(
                 # 配置 DNS 以确保可以解析域名
                 "--run-command" "echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true"
                 "--run-command" "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null || true"
-                # 替换 deb.debian.org (分别处理 http 和 https)
-                "--run-command" "sed -i 's|http://deb.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
-                "--run-command" "sed -i 's|https://deb.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
-                "--run-command" "sed -i 's|http://security.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
-                "--run-command" "sed -i 's|https://security.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
-                "--run-command" "sed -i 's|http://archive.ubuntu.com|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
-                "--run-command" "sed -i 's|https://archive.ubuntu.com|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
+                # 直接写入新的 mirror list (Debian 12 cloud 格式)
+                "--run-command" "echo 'deb ${APT_MIRROR} bookworm main contrib non-free non-free-firmware' > /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb ${APT_MIRROR} bookworm-updates main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb ${APT_MIRROR} bookworm-backports main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "echo 'deb ${APT_MIRROR}-security bookworm-security main contrib non-free non-free-firmware' >> /etc/apt/sources.list 2>/dev/null || true"
+                # 备份旧的 mirror list 文件
+                "--run-command" "mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak 2>/dev/null || true"
                 "--run-command" "apt-get update || true"  # 更新包列表
             )
         else
