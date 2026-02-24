@@ -44,16 +44,20 @@ jobs:
           INPUT_IMAGE: ${{ github.event.inputs.image }}
           INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
-          # 获取镜像列表
+          # 获取镜像列表（push 事件默认只测试 debian13，加快 CI 速度）
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
             images="$INPUT_IMAGE"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            images="debian13"  # 默认只测试 debian13
           else
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
 
-          # 获取架构列表
+          # 获取架构列表（push 事件默认只测试 amd64）
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_ARCH" != "all" ] && [ -n "$INPUT_ARCH" ]; then
             archs="$INPUT_ARCH"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            archs="amd64"  # 默认只测试 amd64
           else
             archs="amd64 arm64"
           fi

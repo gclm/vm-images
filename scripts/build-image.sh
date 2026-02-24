@@ -259,9 +259,16 @@ build_image() {
         customize_args+=("--run-command" "$cmd")
     done
 
-    # 执行 virt-customize (使用 sudo 确保一致的权限上下文)
+    # 执行 virt-customize
+    # 临时禁用 passt（GitHub Actions 环境中 passt 有权限问题）
     log_info "定制镜像中..."
+    if command -v passt &> /dev/null; then
+        log_warn "暂时禁用 passt，使用 slirp 网络..."
+        sudo mv /usr/bin/passt /usr/bin/passt.disabled 2>/dev/null || true
+    fi
     sudo virt-customize "${customize_args[@]}"
+    # 恢复 passt
+    sudo mv /usr/bin/passt.disabled /usr/bin/passt 2>/dev/null || true
 
     # 压缩镜像
     log_info "压缩镜像..."
