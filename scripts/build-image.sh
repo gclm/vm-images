@@ -177,17 +177,27 @@ build_image() {
     if [ "$OS_FAMILY" = "debian" ]; then
         customize_args+=("--run-command" "dpkg --configure -a || true")
 
-        # APT 镜像源
+        # APT 镜像源 - 需要同时匹配 http:// 和 https://
         if [ -n "$APT_MIRROR" ] && [ "$APT_MIRROR" != "null" ]; then
             customize_args+=(
+                # 配置 DNS 以确保可以解析域名
+                "--run-command" "echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true"
+                "--run-command" "echo 'nameserver 8.8.4.4' >> /etc/resolv.conf 2>/dev/null || true"
+                # 替换 deb.debian.org (分别处理 http 和 https)
                 "--run-command" "sed -i 's|http://deb.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "sed -i 's|https://deb.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "sed -i 's|http://security.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "sed -i 's|https://security.debian.org|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "sed -i 's|http://archive.ubuntu.com|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
+                "--run-command" "sed -i 's|https://archive.ubuntu.com|${APT_MIRROR}|g' /etc/apt/sources.list 2>/dev/null || true"
                 "--run-command" "apt-get update || true"  # 更新包列表
             )
         else
-            # 没有 mirror 配置时也需要更新
-            customize_args+=("--run-command" "apt-get update || true")
+            # 没有 mirror 配置时，配置 DNS 并更新
+            customize_args+=(
+                "--run-command" "echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true"
+                "--run-command" "apt-get update || true"
+            )
         fi
     else
         # RHEL 系列
