@@ -256,21 +256,16 @@ build_image() {
         customize_args+=("--ssh-inject" "${first_user}:string:${SSH_PUBLIC_KEY}")
     fi
 
-    # 写入文件
+    # 写入文件 (使用 --write 命令直接写入内容)
     local file_count=$(yq '.files | length' "$config_path")
     for ((i=0; i<file_count; i++)); do
         local file_path=$(yq ".files[$i].path" "$config_path")
         local file_content=$(yq ".files[$i].content" "$config_path")
         local file_perm=$(yq ".files[$i].permissions" "$config_path")
 
-        # 创建临时文件
-        local tmp_file=$(mktemp)
-        echo "$file_content" > "$tmp_file"
-
-        customize_args+=("--copy-in" "${tmp_file}:${file_path}")
+        # 使用 --write 直接写入内容到指定路径
+        customize_args+=("--write" "${file_path}:${file_content}")
         customize_args+=("--run-command" "chmod ${file_perm} ${file_path}")
-
-        tmp_files+=("$tmp_file")
     done
 
     # 运行命令
