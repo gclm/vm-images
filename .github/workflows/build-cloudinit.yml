@@ -20,6 +20,9 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write
+
 env:
   SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
   ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
