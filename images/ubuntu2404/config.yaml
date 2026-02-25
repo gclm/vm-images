@@ -1,5 +1,5 @@
 # Ubuntu 24.04 (Noble) 基础镜像配置
-name: ubuntu2404-base
+name: ubuntu2404
 description: Ubuntu 24.04 LTS (Noble) 基础镜像
 version: "1.0.0"
 

@@ -66,11 +66,11 @@ declare -A IMAGE_URLS=(
 
 # 镜像名称映射
 declare -A IMAGE_NAMES=(
-    ["debian12"]="debian12-base"
-    ["debian13"]="debian13-base"
-    ["ubuntu2204"]="ubuntu2204-base"
-    ["ubuntu2404"]="ubuntu2404-base"
-    ["rocky10"]="rocky10-base"
+    ["debian12"]="debian12"
+    ["debian13"]="debian13"
+    ["ubuntu2204"]="ubuntu2204"
+    ["ubuntu2404"]="ubuntu2404"
+    ["rocky10"]="rocky10"
 )
 
 # 显示帮助

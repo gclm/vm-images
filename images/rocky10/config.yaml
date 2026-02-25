@@ -1,5 +1,5 @@
 # Rocky Linux 10 基础镜像配置
-name: rocky10-base
+name: rocky10
 description: Rocky Linux 10 基础镜像
 version: "1.0.0"
 

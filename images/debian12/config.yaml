@@ -1,5 +1,5 @@
 # Debian 12 (Bookworm) 基础镜像配置
-name: debian12-base
+name: debian12
 description: Debian 12 (Bookworm) 基础镜像
 version: "1.0.0"
 

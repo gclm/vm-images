@@ -1,5 +1,5 @@
 # Ubuntu 22.04 (Jammy) 基础镜像配置
-name: ubuntu2204-base
+name: ubuntu2204
 description: Ubuntu 22.04 LTS (Jammy) 基础镜像
 version: "1.0.0"
 
