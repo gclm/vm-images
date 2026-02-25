@@ -151,25 +151,89 @@ output/
 
 ### Cloud-Init 方式
 
+> **注意**: cloud-init 只在首次启动时执行一次（通过 instance-id 判断）。重启不会重复执行。但建议首次配置完成后移除 ISO。
+
+#### 方法一：一键脚本
+
 ```bash
-# 上传文件到 PVE
-scp output/debian12-base-amd64.qcow2 root@pve:/var/lib/vz/template/qcow2/
-scp output/debian12-base-cloudinit.iso root@pve:/var/lib/vz/template/iso/
+# 在 PVE 上执行，替换相关变量
+VMID=100
+NAME="debian12-vm"
+MEMORY=2048
+CORES=2
+DISK="local-lvm"
+BRIDGE="vmbr0"
+
+# 上传文件（从构建机器执行）
+scp output/debian12-base-amd64.qcow2 root@pve:/tmp/
+scp output/debian12-base-cloudinit.iso root@pve:/tmp/
+
+# 在 PVE 上执行以下脚本
+cat << 'SCRIPT' | ssh root@pve bash -s -- "$VMID" "$NAME" "$MEMORY" "$CORES" "$DISK" "$BRIDGE"
+VMID=$1; NAME=$2; MEMORY=$3; CORES=$4; DISK=$5; BRIDGE=$6
 
 # 创建 VM
-qm create 100 --name my-vm --memory 2048 --cores 2 \
-  --net0 virtio,bridge=vmbr0
+qm create $VMID --name "$NAME" --memory $MEMORY --cores $CORES \
+  --net0 virtio,bridge=$BRIDGE --scsihw virtio-scsi-pci
 
 # 导入磁盘
-qm importdisk 100 /var/lib/vz/template/qcow2/debian12-base-amd64.qcow2 local-lvm
+qm importdisk $VMID /tmp/debian12-base-amd64.qcow2 $DISK
+qm set $VMID --scsi0 ${DISK}:vm-${VMID}-disk-0
 
-# 配置磁盘和 CD-ROM
-qm set 100 --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-100-disk-0
-qm set 100 --ide2 local:iso/debian12-base-cloudinit.iso,media=cdrom
+# 挂载 cloud-init ISO
+qm set $VMID --ide2 none,media=cdrom
+qm set $VMID --ide2 /tmp/debian12-base-cloudinit.iso,media=cdrom
 
 # 启动 VM
-qm start 100
+qm start $VMID
+
+echo "VM $VMID 已启动，请等待 cloud-init 完成配置 (约 2-3 分钟)"
+echo "配置完成后，执行以下命令移除 ISO："
+echo "  qm set $VMID --ide2 none,media=cdrom"
+SCRIPT
 ```
+
+#### 方法二：分步操作
+
+```bash
+# 1. 上传文件到 PVE
+scp output/debian12-base-amd64.qcow2 root@pve:/tmp/
+scp output/debian12-base-cloudinit.iso root@pve:/tmp/
+
+# 2. 创建 VM
+qm create 100 --name debian12-vm --memory 2048 --cores 2 \
+  --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-pci
+
+# 3. 导入磁盘
+qm importdisk 100 /tmp/debian12-base-amd64.qcow2 local-lvm
+qm set 100 --scsi0 local-lvm:vm-100-disk-0
+
+# 4. 挂载 cloud-init ISO
+qm set 100 --ide2 /tmp/debian12-base-cloudinit.iso,media=cdrom
+
+# 5. 启动 VM
+qm start 100
+
+# 6. 等待配置完成 (2-3 分钟后)
+# SSH 连接测试
+ssh debian@<VM_IP>
+
+# 7. 配置完成后，移除 ISO（推荐）
+qm set 100 --ide2 none,media=cdrom
+
+# 8. 清理临时文件
+rm /tmp/debian12-base-amd64.qcow2 /tmp/debian12-base-cloudinit.iso
+```
+
+#### cloud-init 执行说明
+
+| 场景 | 是否执行配置 |
+|:---|:---:|
+| 首次启动 | ✅ 执行 |
+| 重启 VM | ❌ 不执行 |
+| 重新挂载 ISO 并重启 | ❌ 不执行 (instance-id 相同) |
+| 生成新 ISO 并重启 | ✅ 执行 (instance-id 不同) |
+| 手动执行 `cloud-init clean` 后重启 | ✅ 执行 |
 
 ### virt-customize 方式
 
