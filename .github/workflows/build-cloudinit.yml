@@ -1,0 +1,194 @@
+name: Build VM Images (Cloud-Init)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/**/config.yaml'
+      - 'scripts/**'
+      - '.github/workflows/build-cloudinit.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Image to build (e.g., debian12, all)'
+        required: true
+        default: 'all'
+
+env:
+  SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+  ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Detect images
+        id: detect
+        env:
+          INPUT_IMAGE: ${{ github.event.inputs.image }}
+        run: |
+          # 获取镜像列表
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
+            images="$INPUT_IMAGE"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            images="debian12"
+          else
+            images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
+          fi
+
+          echo "Images: $images"
+
+          # 生成矩阵
+          matrix='{"include":[]}'
+          for img in $images; do
+            config="images/${img}/config.yaml"
+            if [ -f "$config" ]; then
+              matrix=$(echo "$matrix" | jq -c --arg img "$img" '.include += [{"image": $img}]')
+            fi
+          done
+
+          matrix=$(echo "$matrix" | jq -c .)
+          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          echo "Detected matrix:"
+          echo "$matrix" | jq .
+
+  build:
+    needs: detect
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-utils wget genisoimage openssl
+          # 安装 yq
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check secrets
+        run: |
+          if [ -z "$SSH_PUBLIC_KEY" ]; then
+            echo "Error: SSH_PUBLIC_KEY secret is not set"
+            exit 1
+          fi
+          if [ -z "$ROOT_PASSWORD" ]; then
+            echo "Error: ROOT_PASSWORD secret is not set"
+            exit 1
+          fi
+          echo "Secrets verified"
+
+      - name: Download cloud image
+        env:
+          BUILD_IMAGE: ${{ matrix.image }}
+        run: |
+          # 读取配置
+          config_path="images/${BUILD_IMAGE}/config.yaml"
+          name=$(yq '.name' "$config_path")
+
+          # 获取 AMD64 镜像 URL
+          source_url=$(yq '.source.amd64' "$config_path")
+
+          echo "Image name: $name"
+          echo "Source URL: $source_url"
+
+          # 下载镜像
+          mkdir -p output .cache
+          cache_file=".cache/$(basename "$source_url")"
+
+          if [ -f "$cache_file" ]; then
+            echo "Using cached image: $cache_file"
+          else
+            echo "Downloading source image..."
+            wget -q --show-progress "$source_url" -O "$cache_file"
+          fi
+
+          # 复制到输出目录
+          output_file="output/${name}-amd64.qcow2"
+          cp "$cache_file" "$output_file"
+
+          # 扩展磁盘大小
+          disk_size=$(yq '.disk.size' "$config_path")
+          echo "Resizing disk to $disk_size..."
+          qemu-img resize "$output_file" "$disk_size"
+
+          # 生成校验和
+          sha256sum "$output_file" > "${output_file}.sha256"
+
+          echo "output_file=$output_file" >> $GITHUB_ENV
+          echo "image_name=$name" >> $GITHUB_ENV
+
+      - name: Generate cloud-init ISO
+        env:
+          BUILD_IMAGE: ${{ matrix.image }}
+        run: |
+          chmod +x scripts/generate-cloud-init.sh
+          ./scripts/generate-cloud-init.sh "$BUILD_IMAGE" ./output
+
+      - name: List output files
+        run: |
+          echo "=== Output files ==="
+          ls -lh output/
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}-amd64-${{ github.sha }}
+          path: |
+            output/*.qcow2
+            output/*.sha256
+          retention-days: 30
+
+      - name: Upload cloud-init artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}-cloudinit-${{ github.sha }}
+          path: |
+            output/*-cloudinit.iso
+            output/*-cloudinit.iso.sha256
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -name "*.qcow2" -exec cp {} release/ \;
+          find artifacts -name "*.sha256" -exec cp {} release/ \;
+          find artifacts -name "*.iso" -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

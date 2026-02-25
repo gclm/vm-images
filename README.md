@@ -44,7 +44,29 @@ cp .env.example .env
 vim .env
 ```
 
-### 2. 本地构建 (Linux)
+### 2. 本地构建
+
+#### 方式一：Cloud-Init 方式 (推荐)
+
+不需要 libguestfs，CI 环境友好，配置在 VM 启动时应用。
+
+```bash
+# 安装工具
+sudo apt install qemu-utils wget genisoimage openssl
+
+# 安装 yq
+sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+sudo chmod +x /usr/local/bin/yq
+
+# 构建镜像 + cloud-init ISO
+./scripts/build-with-cloudinit.sh debian12           # amd64 (默认)
+./scripts/build-with-cloudinit.sh debian12 amd64     # amd64
+./scripts/build-with-cloudinit.sh debian12 arm64     # arm64
+```
+
+#### 方式二：virt-customize 方式 (需要 libguestfs)
+
+直接修改镜像，需要 Linux 环境和 KVM 支持。
 
 ```bash
 # 安装工具
@@ -69,8 +91,15 @@ sudo chmod +x /usr/local/bin/yq
 | `SSH_PUBLIC_KEY` | SSH 公钥 |
 | `ROOT_PASSWORD` | root 密码 |
 
+有两种工作流可选：
+
+| 工作流 | 文件 | 说明 |
+|:---|:---|:---|
+| Cloud-Init (推荐) | `build-cloudinit.yml` | 不需要 libguestfs，CI 友好 |
+| virt-customize | `build-images.yml` | 需要跳过软件包安装 |
+
 触发方式：
-- Push 到 main 分支自动构建所有镜像
+- Push 到 main 分支自动构建
 - 手动触发指定镜像和架构
 - 创建 tag 发布 release
 
@@ -79,32 +108,70 @@ sudo chmod +x /usr/local/bin/yq
 ```
 iso/
 ├── .env.example
-├── .github/workflows/build-images.yml
+├── .github/workflows/
+│   ├── build-cloudinit.yml         # Cloud-Init 工作流 (推荐)
+│   └── build-images.yml            # virt-customize 工作流
 ├── images/
 │   ├── debian12/config.yaml
 │   ├── debian13/config.yaml
 │   ├── ubuntu2204/config.yaml
 │   ├── ubuntu2404/config.yaml
 │   └── rocky10/config.yaml
-├── scripts/build-image.sh
+├── scripts/
+│   ├── build-with-cloudinit.sh     # Cloud-Init 构建脚本 (推荐)
+│   ├── generate-cloud-init.sh      # 仅生成 cloud-init ISO
+│   └── build-image.sh              # virt-customize 构建脚本
 ├── output/                         # 构建输出
 └── README.md
 ```
 
 ## 输出文件
 
-构建后的文件命名格式：`{镜像名}-{架构}.qcow2`
+### Cloud-Init 方式输出
+
+```
+output/
+├── debian12-base-amd64.qcow2           # 虚拟机镜像
+├── debian12-base-amd64.qcow2.sha256    # 镜像校验和
+├── debian12-base-cloudinit.iso         # cloud-init 配置 ISO
+└── debian12-base-cloudinit.iso.sha256  # ISO 校验和
+```
+
+### virt-customize 方式输出
 
 ```
 output/
 ├── debian12-base-amd64.qcow2
 ├── debian12-base-amd64.qcow2.sha256
 ├── debian12-base-arm64.qcow2
-├── debian12-base-arm64.qcow2.sha256
-└── ...
+└── debian12-base-arm64.qcow2.sha256
 ```
 
 ## 导入 PVE
+
+### Cloud-Init 方式
+
+```bash
+# 上传文件到 PVE
+scp output/debian12-base-amd64.qcow2 root@pve:/var/lib/vz/template/qcow2/
+scp output/debian12-base-cloudinit.iso root@pve:/var/lib/vz/template/iso/
+
+# 创建 VM
+qm create 100 --name my-vm --memory 2048 --cores 2 \
+  --net0 virtio,bridge=vmbr0
+
+# 导入磁盘
+qm importdisk 100 /var/lib/vz/template/qcow2/debian12-base-amd64.qcow2 local-lvm
+
+# 配置磁盘和 CD-ROM
+qm set 100 --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-100-disk-0
+qm set 100 --ide2 local:iso/debian12-base-cloudinit.iso,media=cdrom
+
+# 启动 VM
+qm start 100
+```
+
+### virt-customize 方式
 
 ```bash
 # 上传到 PVE
