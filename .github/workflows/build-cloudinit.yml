@@ -55,8 +55,8 @@ jobs:
 
           echo "Images: $images"
 
-          # 生成 JSON 数组
-          images_json=$(echo "$images" | tr ' ' '\n' | jq -R . | jq -s .)
+          # 生成 JSON 数组 (压缩为单行)
+          images_json=$(echo "$images" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s -c .)
           echo "images=$images_json" >> $GITHUB_OUTPUT
           echo "Detected: $images_json"
 
