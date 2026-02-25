@@ -183,6 +183,8 @@ jobs:
           retention-days: 30
 
       - name: Upload cloud-init artifact
+        # 只在 amd64 架构时上传 cloud-init ISO（配置对所有架构相同）
+        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.image }}-cloudinit-${{ github.sha }}
