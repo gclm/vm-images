@@ -1,4 +1,4 @@
-name: Build VM Images (Cloud-Init)
+name: Build Cloud-Init ISO
 
 on:
   push:
@@ -15,10 +15,6 @@ on:
         description: 'Image to build (e.g., debian12, all)'
         required: true
         default: 'all'
-      arch:
-        description: 'Architecture (amd64, arm64, all)'
-        required: true
-        default: 'all'
       version:
         description: 'Version tag (e.g., v1.0.0, leave empty for no release)'
         required: false
@@ -32,24 +28,21 @@ jobs:
   detect:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.detect.outputs.matrix }}
+      images: ${{ steps.detect.outputs.images }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install yq and jq
+      - name: Install yq
         run: |
-          sudo apt install -y jq
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Detect images and architectures
+      - name: Detect images
         id: detect
         env:
           INPUT_IMAGE: ${{ github.event.inputs.image }}
-          INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
-          # 获取镜像列表
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
             images="$INPUT_IMAGE"
           elif [ "${{ github.event_name }}" = "push" ]; then
@@ -58,51 +51,28 @@ jobs:
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
 
-          # 获取架构列表
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_ARCH" != "all" ] && [ -n "$INPUT_ARCH" ]; then
-            archs="$INPUT_ARCH"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            archs="amd64"
-          else
-            archs="amd64 arm64"
-          fi
-
           echo "Images: $images"
-          echo "Archs: $archs"
 
-          # 生成矩阵
-          matrix='{"include":[]}'
-          for img in $images; do
-            for arch in $archs; do
-              config="images/${img}/config.yaml"
-              if [ -f "$config" ]; then
-                url=$(yq ".source.${arch}" "$config" 2>/dev/null)
-                if [ -n "$url" ] && [ "$url" != "null" ]; then
-                  matrix=$(echo "$matrix" | jq -c --arg img "$img" --arg arch "$arch" '.include += [{"image": $img, "arch": $arch}]')
-                fi
-              fi
-            done
-          done
-
-          matrix=$(echo "$matrix" | jq -c .)
-          echo "matrix=$matrix" >> $GITHUB_OUTPUT
-          echo "Detected matrix:"
-          echo "$matrix" | jq .
+          # 生成 JSON 数组
+          images_json=$(echo "$images" | tr ' ' '\n' | jq -R . | jq -s .)
+          echo "images=$images_json" >> $GITHUB_OUTPUT
+          echo "Detected: $images_json"
 
   build:
     needs: detect
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      matrix:
+        image: ${{ fromJson(needs.detect.outputs.images) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build tools
+      - name: Install tools
         run: |
           sudo apt update
-          sudo apt install -y qemu-utils wget genisoimage openssl jq
+          sudo apt install -y genisoimage openssl jq
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
@@ -118,49 +88,6 @@ jobs:
           fi
           echo "Secrets verified"
 
-      - name: Download cloud image
-        env:
-          BUILD_IMAGE: ${{ matrix.image }}
-          BUILD_ARCH: ${{ matrix.arch }}
-        run: |
-          # 读取配置
-          config_path="images/${BUILD_IMAGE}/config.yaml"
-          name=$(yq '.name' "$config_path")
-
-          # 根据架构获取镜像 URL
-          source_url=$(yq ".source.${BUILD_ARCH}" "$config_path")
-
-          echo "Image name: $name"
-          echo "Architecture: $BUILD_ARCH"
-          echo "Source URL: $source_url"
-
-          # 下载镜像
-          mkdir -p output .cache
-          cache_file=".cache/$(basename "$source_url")"
-
-          if [ -f "$cache_file" ]; then
-            echo "Using cached image: $cache_file"
-          else
-            echo "Downloading source image..."
-            wget -q --show-progress "$source_url" -O "$cache_file"
-          fi
-
-          # 复制到输出目录
-          output_file="output/${name}-${BUILD_ARCH}.qcow2"
-          cp "$cache_file" "$output_file"
-
-          # 扩展磁盘大小
-          disk_size=$(yq '.disk.size' "$config_path")
-          echo "Resizing disk to $disk_size..."
-          qemu-img resize "$output_file" "$disk_size"
-
-          # 生成校验和
-          sha256sum "$output_file" > "${output_file}.sha256"
-
-          echo "output_file=$output_file" >> $GITHUB_ENV
-          echo "image_name=$name" >> $GITHUB_ENV
-          echo "build_arch=$BUILD_ARCH" >> $GITHUB_ENV
-
       - name: Generate cloud-init ISO
         env:
           BUILD_IMAGE: ${{ matrix.image }}
@@ -169,35 +96,21 @@ jobs:
           ./scripts/generate-cloud-init.sh "$BUILD_IMAGE" ./output
 
       - name: List output files
-        run: |
-          echo "=== Output files ==="
-          ls -lh output/
+        run: ls -lh output/
 
-      - name: Upload image artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.image }}-${{ matrix.arch }}-${{ github.sha }}
-          path: |
-            output/*.qcow2
-            output/*.sha256
-          retention-days: 30
-
-      - name: Upload cloud-init artifact
-        # 只在 amd64 架构时上传 cloud-init ISO（配置对所有架构相同）
-        if: matrix.arch == 'amd64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.image }}-cloudinit-${{ github.sha }}
+          name: ${{ matrix.image }}-cloudinit
           path: |
             output/*-cloudinit.iso
             output/*-cloudinit.iso.sha256
-          retention-days: 30
+          retention-days: 90
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    # 当有 tag 或手动指定版本号时创建 release
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
     env:
       VERSION: ${{ github.event.inputs.version }}
     steps:
@@ -205,7 +118,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create and push tag
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -220,24 +132,14 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -name "*.qcow2" -exec cp {} release/ \;
-          find artifacts -name "*.sha256" -exec cp {} release/ \;
           find artifacts -name "*.iso" -exec cp {} release/ \;
+          find artifacts -name "*.sha256" -exec cp {} release/ \;
           ls -lh release/
-
-      - name: Determine tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
 
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ env.VERSION }}
           files: release/*
           generate_release_notes: true
         env:
