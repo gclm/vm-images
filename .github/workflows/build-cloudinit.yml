@@ -15,6 +15,10 @@ on:
         description: 'Image to build (e.g., debian12, all)'
         required: true
         default: 'all'
+      arch:
+        description: 'Architecture (amd64, arm64, all)'
+        required: true
+        default: 'all'
 
 env:
   SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
@@ -29,15 +33,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install yq
+      - name: Install yq and jq
         run: |
+          sudo apt install -y jq
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Detect images
+      - name: Detect images and architectures
         id: detect
         env:
           INPUT_IMAGE: ${{ github.event.inputs.image }}
+          INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
           # 获取镜像列表
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
@@ -48,15 +54,30 @@ jobs:
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
 
+          # 获取架构列表
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_ARCH" != "all" ] && [ -n "$INPUT_ARCH" ]; then
+            archs="$INPUT_ARCH"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            archs="amd64"
+          else
+            archs="amd64 arm64"
+          fi
+
           echo "Images: $images"
+          echo "Archs: $archs"
 
           # 生成矩阵
           matrix='{"include":[]}'
           for img in $images; do
-            config="images/${img}/config.yaml"
-            if [ -f "$config" ]; then
-              matrix=$(echo "$matrix" | jq -c --arg img "$img" '.include += [{"image": $img}]')
-            fi
+            for arch in $archs; do
+              config="images/${img}/config.yaml"
+              if [ -f "$config" ]; then
+                url=$(yq ".source.${arch}" "$config" 2>/dev/null)
+                if [ -n "$url" ] && [ "$url" != "null" ]; then
+                  matrix=$(echo "$matrix" | jq -c --arg img "$img" --arg arch "$arch" '.include += [{"image": $img, "arch": $arch}]')
+                fi
+              fi
+            done
           done
 
           matrix=$(echo "$matrix" | jq -c .)
@@ -77,8 +98,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt update
-          sudo apt install -y qemu-utils wget genisoimage openssl
-          # 安装 yq
+          sudo apt install -y qemu-utils wget genisoimage openssl jq
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
@@ -97,15 +117,17 @@ jobs:
       - name: Download cloud image
         env:
           BUILD_IMAGE: ${{ matrix.image }}
+          BUILD_ARCH: ${{ matrix.arch }}
         run: |
           # 读取配置
           config_path="images/${BUILD_IMAGE}/config.yaml"
           name=$(yq '.name' "$config_path")
 
-          # 获取 AMD64 镜像 URL
-          source_url=$(yq '.source.amd64' "$config_path")
+          # 根据架构获取镜像 URL
+          source_url=$(yq ".source.${BUILD_ARCH}" "$config_path")
 
           echo "Image name: $name"
+          echo "Architecture: $BUILD_ARCH"
           echo "Source URL: $source_url"
 
           # 下载镜像
@@ -120,7 +142,7 @@ jobs:
           fi
 
           # 复制到输出目录
-          output_file="output/${name}-amd64.qcow2"
+          output_file="output/${name}-${BUILD_ARCH}.qcow2"
           cp "$cache_file" "$output_file"
 
           # 扩展磁盘大小
@@ -133,6 +155,7 @@ jobs:
 
           echo "output_file=$output_file" >> $GITHUB_ENV
           echo "image_name=$name" >> $GITHUB_ENV
+          echo "build_arch=$BUILD_ARCH" >> $GITHUB_ENV
 
       - name: Generate cloud-init ISO
         env:
@@ -149,7 +172,7 @@ jobs:
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.image }}-amd64-${{ github.sha }}
+          name: ${{ matrix.image }}-${{ matrix.arch }}-${{ github.sha }}
           path: |
             output/*.qcow2
             output/*.sha256
