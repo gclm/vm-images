@@ -19,6 +19,10 @@ on:
         description: 'Architecture (amd64, arm64, all)'
         required: true
         default: 'all'
+      version:
+        description: 'Version tag (e.g., v1.0.0, leave empty for no release)'
+        required: false
+        default: ''
 
 env:
   SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
@@ -190,10 +194,21 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # 当有 tag 或手动指定版本号时创建 release
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '')
+    env:
+      VERSION: ${{ github.event.inputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -208,9 +223,19 @@ jobs:
           find artifacts -name "*.iso" -exec cp {} release/ \;
           ls -lh release/
 
+      - name: Determine tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: release/*
           generate_release_notes: true
         env:
