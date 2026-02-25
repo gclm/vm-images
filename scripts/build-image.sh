@@ -268,12 +268,16 @@ build_image() {
         customize_args+=("--run-command" "chmod ${file_perm} ${file_path}")
     done
 
-    # 运行命令
-    local cmd_count=$(yq '.commands | length' "$config_path")
-    for ((i=0; i<cmd_count; i++)); do
-        local cmd=$(yq ".commands[$i]" "$config_path")
-        customize_args+=("--run-command" "$cmd")
-    done
+    # 运行命令 (CI 环境跳过，因为依赖已安装的软件包)
+    if [ "${CI_SKIP_PACKAGES:-false}" = "true" ]; then
+        log_warn "CI 环境跳过 commands 执行 (依赖软件包未安装)"
+    else
+        local cmd_count=$(yq '.commands | length' "$config_path")
+        for ((i=0; i<cmd_count; i++)); do
+            local cmd=$(yq ".commands[$i]" "$config_path")
+            customize_args+=("--run-command" "$cmd")
+        done
+    fi
 
     # 执行 virt-customize
     # 临时禁用 passt（GitHub Actions 环境中 passt 有权限问题）
