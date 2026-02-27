@@ -1,15 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# pve-create-template.sh - 在 PVE 上创建 cloud-init 模板（不启动模板）
+# pve-create-template.sh - 在 PVE 上下载 qcow2 并创建模板
 #
 # 用法:
 #   ./pve-create-template.sh <os> <arch> <vmid> [options]
-#
-# 设计原则:
-#   - 模板阶段不启动 VM
-#   - 模板中不固化账号/密码
-#   - 克隆实例后在 PVE GUI 中配置 ciuser/sshkeys/ipconfig0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,22 +23,20 @@ BRIDGE="vmbr0"
 MEMORY=2048
 CORES=2
 DISK_SIZE="10G"
-CI_USER="root"
-CI_PASSWORD=""
-CI_SSHKEY_FILE=""
-CI_SSHKEY_TEXT=""
-RESOLVED_SSHKEY_FILE=""
-CI_CUSTOM=""
-CI_UPGRADE=true
-NO_TEMPLATE=false
-SKIP_DOWNLOAD=false
 
 RELEASE="latest"
 GH_REPO="${GH_REPO:-gclm/vm-images}"
 IMAGE_URL=""
+SHA256=""
+SHA256_URL=""
 
 USE_PROXY=false
 PROXY_URL="${PROXY_URL:-https://proxy.991201.xyz/}"
+
+RELEASE_TAG=""
+RESOLVED_IMAGE_URL=""
+REMOTE_SHA256=""
+IMAGE_FILE=""
 
 declare -A IMAGE_NAMES=(
     ["debian12"]="debian12"
@@ -68,25 +61,18 @@ show_help() {
   --memory MB        内存大小 (默认: 2048)
   --cores N          CPU 核心数 (默认: 2)
   --disk-size SIZE   磁盘大小 (默认: 10G)
-  --ciuser USER      cloud-init 用户名 (默认: root)
-  --cipassword PASS  cloud-init 密码 (可选)
-  --sshkey-file FILE SSH 公钥文件路径
-  --sshkey KEY       SSH 公钥内容（单行）
-  --cicustom CONFIG  自定义 cloud-init 配置 (格式: user=local:snippets/file.yaml)
-  --ciupgrade        升级系统包 (默认: true)
-  --no-ciupgrade     不升级系统包
   --release TAG      GitHub Release 标签 (默认: latest)
   --repo OWNER/REPO  GitHub 仓库 (默认: gclm/vm-images)
   --image-url URL    直接指定 qcow2 下载地址（优先级最高）
-  --no-template      创建 VM 但不转换为模板
-  --skip-download    跳过下载，使用 /tmp 中已有镜像
+  --sha256 HASH      显式指定镜像 SHA256（64位十六进制）
+  --sha256-url URL   指定 SHA256 文件下载地址
   --proxy            启用代理下载
   --proxy-url URL    自定义代理地址
 
-示例:
-  $0 debian13 amd64 9011 --storage hdd-pool --release v1.0.0
-  $0 ubuntu2404 amd64 9012 --repo yourorg/vm-images --release v2.0.0
-  $0 debian13 amd64 9013 --image-url https://example.com/debian13-amd64.qcow2
+说明:
+  - 脚本会在 /tmp 检查同名镜像，若 SHA256 一致则复用，不一致则覆盖下载。
+  - GitHub release 默认使用 <image>.qcow2.sha256 作为校验文件。
+  - 使用 --image-url 时，若未指定 --sha256/--sha256-url，会尝试 <image-url>.sha256。
 EOF
     exit 0
 }
@@ -113,18 +99,11 @@ parse_args() {
             --memory) MEMORY="$2"; shift 2 ;;
             --cores) CORES="$2"; shift 2 ;;
             --disk-size) DISK_SIZE="$2"; shift 2 ;;
-            --ciuser) CI_USER="$2"; shift 2 ;;
-            --cipassword) CI_PASSWORD="$2"; shift 2 ;;
-            --sshkey-file) CI_SSHKEY_FILE="$2"; shift 2 ;;
-            --sshkey) CI_SSHKEY_TEXT="$2"; shift 2 ;;
-            --cicustom) CI_CUSTOM="$2"; shift 2 ;;
-            --ciupgrade) CI_UPGRADE=true; shift ;;
-            --no-ciupgrade) CI_UPGRADE=false; shift ;;
             --release) RELEASE="$2"; shift 2 ;;
             --repo) GH_REPO="$2"; shift 2 ;;
             --image-url) IMAGE_URL="$2"; shift 2 ;;
-            --no-template) NO_TEMPLATE=true; shift ;;
-            --skip-download) SKIP_DOWNLOAD=true; shift ;;
+            --sha256) SHA256="$2"; shift 2 ;;
+            --sha256-url) SHA256_URL="$2"; shift 2 ;;
             --proxy) USE_PROXY=true; shift ;;
             --proxy-url) PROXY_URL="$2"; USE_PROXY=true; shift 2 ;;
             -h|--help) show_help ;;
@@ -143,12 +122,9 @@ parse_args() {
         exit 1
     fi
 
-    if [ -n "$CI_CUSTOM" ] && [ -n "$CI_PASSWORD" ]; then
-        log_warn "同时设置 --cicustom 与 --cipassword，密码可能被自定义 user-data 覆盖"
-    fi
-
-    if [ -n "$CI_CUSTOM" ] && { [ -n "$CI_SSHKEY_FILE" ] || [ -n "$CI_SSHKEY_TEXT" ]; }; then
-        log_warn "同时设置 --cicustom 与 --sshkey，SSH key 可能被自定义 user-data 覆盖"
+    if [ -n "$SHA256" ] && [ -n "$SHA256_URL" ]; then
+        log_error "--sha256 和 --sha256-url 不能同时使用"
+        exit 1
     fi
 }
 
@@ -158,6 +134,7 @@ check_dependencies() {
     command -v pvesm >/dev/null 2>&1 || missing+=("pvesm")
     command -v wget >/dev/null 2>&1 || missing+=("wget")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
+    command -v sha256sum >/dev/null 2>&1 || missing+=("sha256sum")
 
     if [ ${#missing[@]} -gt 0 ]; then
         log_error "缺少依赖: ${missing[*]}"
@@ -192,7 +169,8 @@ detect_storage() {
 apply_proxy() {
     local url="$1"
     if [ "$USE_PROXY" = true ]; then
-        echo "${PROXY_URL}${url}"
+        local base="${PROXY_URL%/}/"
+        echo "${base}${url}"
     else
         echo "$url"
     fi
@@ -219,131 +197,137 @@ resolve_release_tag() {
     log_info "最新 release: ${RELEASE_TAG}"
 }
 
-resolve_ssh_key() {
-    if [ -n "$CI_SSHKEY_FILE" ] && [ -n "$CI_SSHKEY_TEXT" ]; then
-        log_error "--sshkey-file 和 --sshkey 不能同时使用"
+resolve_urls() {
+    local image_name="${IMAGE_NAMES[$OS]}"
+
+    if [ -n "$IMAGE_URL" ]; then
+        RESOLVED_IMAGE_URL="$IMAGE_URL"
+    else
+        resolve_release_tag
+        RESOLVED_IMAGE_URL="https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${image_name}-${ARCH}.qcow2"
+        if [ -z "$SHA256" ] && [ -z "$SHA256_URL" ]; then
+            SHA256_URL="${RESOLVED_IMAGE_URL}.sha256"
+        fi
+    fi
+
+    if [ -n "$IMAGE_URL" ] && [ -z "$SHA256" ] && [ -z "$SHA256_URL" ]; then
+        SHA256_URL="${RESOLVED_IMAGE_URL}.sha256"
+    fi
+}
+
+resolve_remote_sha256() {
+    if [ -n "$SHA256" ]; then
+        REMOTE_SHA256="$SHA256"
+    else
+        if [ -z "$SHA256_URL" ]; then
+            log_error "无法获取 SHA256：请使用 --sha256 或 --sha256-url"
+            exit 1
+        fi
+
+        log_step "下载 SHA256 校验文件"
+        local checksum_content
+        local effective_sha256_url
+        effective_sha256_url="$(apply_proxy "$SHA256_URL")"
+        log_info "SHA256 URL: $effective_sha256_url"
+        checksum_content=$(curl -fsSL "$effective_sha256_url") || {
+            log_error "下载 SHA256 文件失败: $SHA256_URL"
+            exit 1
+        }
+
+        REMOTE_SHA256=$(printf '%s\n' "$checksum_content" | tr -d '\r' | awk 'NF>0 {print $1; exit}')
+    fi
+
+    REMOTE_SHA256=$(printf '%s' "$REMOTE_SHA256" | tr '[:upper:]' '[:lower:]')
+    if [[ ! "$REMOTE_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+        log_error "无效的 SHA256: $REMOTE_SHA256"
         exit 1
     fi
 
-    if [ -n "$CI_SSHKEY_TEXT" ]; then
-        RESOLVED_SSHKEY_FILE="/tmp/pve-sshkey-${VMID}.pub"
-        printf '%s\n' "$CI_SSHKEY_TEXT" > "$RESOLVED_SSHKEY_FILE"
-        return
-    fi
-
-    if [ -n "$CI_SSHKEY_FILE" ]; then
-        if [ ! -s "$CI_SSHKEY_FILE" ]; then
-            log_error "SSH 公钥文件不存在或为空: $CI_SSHKEY_FILE"
-            exit 1
-        fi
-        RESOLVED_SSHKEY_FILE="$CI_SSHKEY_FILE"
-        return
-    fi
-
-    local candidates=(
-        "${HOME}/.ssh/id_ed25519.pub"
-        "${HOME}/.ssh/id_rsa.pub"
-        "${HOME}/.ssh/authorized_keys"
-    )
-
-    local key_file
-    for key_file in "${candidates[@]}"; do
-        if [ -s "$key_file" ]; then
-            RESOLVED_SSHKEY_FILE="$key_file"
-            log_info "自动检测 SSH key: $RESOLVED_SSHKEY_FILE"
-            return
-        fi
-    done
-
-    if [ -z "$CI_PASSWORD" ]; then
-        log_warn "未提供 SSH key 且未设置密码，首次登录可能失败"
-    fi
+    log_info "远端 SHA256: $REMOTE_SHA256"
 }
 
 download_image() {
     local image_name="${IMAGE_NAMES[$OS]}"
     local image_file="/tmp/${image_name}-${ARCH}.qcow2"
 
-    if [ "$SKIP_DOWNLOAD" = true ] && [ -f "$image_file" ]; then
-        IMAGE_FILE="$image_file"
-        log_info "跳过下载，使用已有镜像: $IMAGE_FILE"
-        return
-    fi
+    local effective_url
+    effective_url=$(apply_proxy "$RESOLVED_IMAGE_URL")
 
-    local url
-    if [ -n "$IMAGE_URL" ]; then
-        url="$IMAGE_URL"
-    else
-        resolve_release_tag
-        url="https://github.com/${GH_REPO}/releases/download/${RELEASE_TAG}/${image_name}-${ARCH}.qcow2"
+    if [ -f "$image_file" ]; then
+        local local_sha
+        local_sha=$(sha256sum "$image_file" | awk '{print $1}')
+        if [ "$local_sha" = "$REMOTE_SHA256" ]; then
+            IMAGE_FILE="$image_file"
+            log_info "本地镜像校验一致，复用: $IMAGE_FILE"
+            return
+        fi
+        log_warn "本地镜像 SHA256 不一致，重新下载覆盖"
+        rm -f "$image_file"
     fi
-
-    url=$(apply_proxy "$url")
 
     log_step "下载 qcow2 镜像"
-    log_info "URL: $url"
+    log_info "URL: $effective_url"
 
-    wget -q --show-progress "$url" -O "${image_file}.tmp"
+    wget -q --show-progress "$effective_url" -O "${image_file}.tmp"
+    local downloaded_sha
+    downloaded_sha=$(sha256sum "${image_file}.tmp" | awk '{print $1}')
+
+    if [ "$downloaded_sha" != "$REMOTE_SHA256" ]; then
+        rm -f "${image_file}.tmp"
+        log_error "下载后 SHA256 校验失败: $downloaded_sha != $REMOTE_SHA256"
+        exit 1
+    fi
+
     mv "${image_file}.tmp" "$image_file"
     IMAGE_FILE="$image_file"
+    log_info "镜像下载并校验成功: $IMAGE_FILE"
 }
 
-create_vm() {
+create_vm_template() {
     local image_name="${IMAGE_NAMES[$OS]}"
+    local net_queues="$CORES"
 
     if qm status "$VMID" >/dev/null 2>&1; then
         log_error "VMID 已存在: $VMID"
         exit 1
     fi
 
+    # virtio-net 多队列最多 8，避免队列过多带来调度开销
+    if [ "$net_queues" -gt 8 ]; then
+        net_queues=8
+    fi
+    if [ "$net_queues" -lt 1 ]; then
+        net_queues=1
+    fi
+
     log_step "创建 VM: $VMID"
+    log_info "性能优化: numa=1 balloon=0 net.queues=${net_queues} scsi(iothread,discard,ssd)"
 
-    local ci_args=(
-        --name "${image_name}-${ARCH}"
-        --memory "$MEMORY"
-        --cores "$CORES"
-        --cpu host
-        --net0 "virtio,bridge=${BRIDGE}"
-        --scsihw virtio-scsi-single
-        --ostype l26
+    qm create "$VMID" \
+        --name "${image_name}-${ARCH}" \
+        --memory "$MEMORY" \
+        --cores "$CORES" \
+        --cpu host \
+        --machine q35 \
+        --numa 1 \
+        --balloon 0 \
+        --net0 "virtio,bridge=${BRIDGE},queues=${net_queues}" \
+        --scsihw virtio-scsi-single \
+        --ostype l26 \
         --agent 1
-        --ciuser "$CI_USER"
-    )
 
-    if [ -n "$CI_PASSWORD" ]; then
-        ci_args+=(--cipassword "$CI_PASSWORD")
-    fi
-    if [ -n "$RESOLVED_SSHKEY_FILE" ]; then
-        ci_args+=(--sshkeys "$RESOLVED_SSHKEY_FILE")
-    fi
-    if [ -n "$CI_CUSTOM" ]; then
-        ci_args+=(--cicustom "$CI_CUSTOM")
-    fi
-    if [ "$CI_UPGRADE" = true ]; then
-        ci_args+=(--ciupgrade 1)
-    fi
-
-    qm create "$VMID" "${ci_args[@]}"
     qm importdisk "$VMID" "$IMAGE_FILE" "$STORAGE"
-    qm set "$VMID" --scsi0 "${STORAGE}:vm-${VMID}-disk-0"
+    qm set "$VMID" --scsi0 "${STORAGE}:vm-${VMID}-disk-0,cache=none,discard=on,ssd=1,iothread=1"
     qm resize "$VMID" scsi0 "$DISK_SIZE"
 
-    # 按文档建议使用 scsi2 作为 cloud-init 盘
+    # cloud-init 盘固定挂在 scsi2
     qm set "$VMID" --scsi2 "${STORAGE}:cloudinit"
     qm set "$VMID" --boot order=scsi0
     qm set "$VMID" --serial0 socket --vga serial0
 
-    log_info "VM 创建完成: $VMID"
-}
-
-convert_to_template() {
-    if [ "$NO_TEMPLATE" = true ]; then
-        log_info "跳过模板转换 (--no-template)"
-        return
-    fi
-
-    log_step "转换为模板（不启动 VM）"
+    log_step "转换为模板"
     qm template "$VMID"
+
     log_info "模板创建成功: $VMID"
 }
 
@@ -351,7 +335,8 @@ main() {
     parse_args "$@"
     check_dependencies
     detect_storage
-    resolve_ssh_key
+    resolve_urls
+    resolve_remote_sha256
 
     log_info "========================================"
     log_info "PVE 模板创建"
@@ -363,26 +348,19 @@ main() {
     log_info "Memory: ${MEMORY}MB"
     log_info "Cores: $CORES"
     log_info "Disk: $DISK_SIZE"
-    log_info "Repo: $GH_REPO"
-    log_info "Release: $RELEASE"
-    if [ -n "$CI_CUSTOM" ]; then
-        log_info "cicustom: $CI_CUSTOM"
-    fi
-    if [ -n "$RESOLVED_SSHKEY_FILE" ]; then
-        log_info "ssh key: $RESOLVED_SSHKEY_FILE"
+    log_info "Image URL: $RESOLVED_IMAGE_URL"
+    if [ -n "$IMAGE_URL" ]; then
+        log_info "Source: custom image-url"
     else
-        log_warn "ssh key: 未设置"
+        log_info "Repo: $GH_REPO"
+        log_info "Release: ${RELEASE_TAG:-$RELEASE}"
     fi
     log_info "========================================"
 
     download_image
-    create_vm
-    convert_to_template
+    create_vm_template
 
     log_info "完成"
-    if [ "$NO_TEMPLATE" = false ]; then
-        log_info "下一步: 在 PVE GUI 克隆模板后配置 Cloud-Init（ciuser/sshkeys/ipconfig0）"
-    fi
 }
 
 main "$@"
