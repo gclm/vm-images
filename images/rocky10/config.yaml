@@ -23,7 +23,6 @@ packages:
   - curl
   - wget
   - git
-  - htop
   - tmux
   - net-tools
   - qemu-guest-agent
