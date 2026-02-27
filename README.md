@@ -1,161 +1,93 @@
-# VM 基础镜像构建工具
+# VM Base Image Builder (PVE)
 
-为 PVE (Proxmox VE) 快速部署预配置的虚拟机模板。
+用于构建可复用的 `qcow2` 基础镜像，并在 Proxmox VE 中快速创建模板。
 
-## 工作原理
+## 方案说明
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Actions CI                         │
-│  ┌─────────────┐                                            │
-│  │ config.yaml │ ──→ 生成 ──→ cloud-init ISO                │
-│  └─────────────┘                                            │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ 发布到 GitHub Release
-┌─────────────────────────────────────────────────────────────┐
-│                      PVE 服务器                              │
-│                                                              │
-│  pve-create-template.sh debian12 amd64 9000                 │
-│       │                                                      │
-│       ├── 下载官方镜像 (debian-12-genericcloud-amd64.qcow2) │
-│       ├── 下载 cloud-init ISO (从 GitHub Release)           │
-│       ├── 创建 VM                                           │
-│       └── 转换为模板                                        │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+本仓库采用以下模型：
 
-## 支持的镜像
+1. GitHub Actions 负责构建和发布 `qcow2` 镜像（不写死账号/密码）。
+2. PVE 侧仅导入 `qcow2` + 挂载 cloud-init 盘 + 转模板（模板阶段不启动）。
+3. 克隆实例后，在 PVE GUI 的 Cloud-Init 页面配置 `ciuser/sshkeys/ipconfig0`。
 
-| 操作系统 | 名称 | amd64 | arm64 |
+这样可以避免 `cicustom user=...` 与 GUI 认证参数互相覆盖。
+
+## 支持镜像
+
+| OS | 标识 | amd64 | arm64 |
 |:---|:---|:---:|:---:|
-| Debian 12 (Bookworm) | `debian12` | ✅ | ✅ |
-| Debian 13 (Trixie) | `debian13` | ✅ | ✅ |
-| Ubuntu 22.04 (Jammy) | `ubuntu2204` | ✅ | ✅ |
-| Ubuntu 24.04 (Noble) | `ubuntu2404` | ✅ | ✅ |
+| Debian 12 | `debian12` | ✅ | ✅ |
+| Debian 13 | `debian13` | ✅ | ✅ |
+| Ubuntu 22.04 | `ubuntu2204` | ✅ | ✅ |
+| Ubuntu 24.04 | `ubuntu2404` | ✅ | ✅ |
 | Rocky Linux 10 | `rocky10` | ✅ | ✅ |
 
-## 快速开始
+## GitHub Actions 构建
 
-### 1. 配置 GitHub Secrets
+工作流文件：`.github/workflows/build-qcow2.yml`
 
-在仓库设置中配置：
+### 触发方式
 
-| Secret | 说明 |
-|:---|:---|
-| `SSH_PUBLIC_KEY` | SSH 公钥 |
-| `ROOT_PASSWORD` | root 密码 |
+- `push`（配置或构建脚本变化时）
+- `pull_request`
+- 手动触发 `workflow_dispatch`
 
-### 2. 触发 CI 构建
+### 手动参数
 
-- Push 到 main 分支自动构建
-- 手动触发：Actions → Build Cloud-Init ISO → Run workflow
+- `image`: 镜像名或 `all`
+- `arch`: `amd64` / `arm64`
+- `version`: 版本号（如 `v1.0.0`，非空时会发 Release）
 
-### 3. 在 PVE 上创建模板
+### 产物
 
-```bash
-# 下载脚本
-wget https://raw.githubusercontent.com/gclm/vm-images/main/scripts/pve-create-template.sh
-chmod +x pve-create-template.sh
+- `<name>-<arch>.qcow2`
+- `<name>-<arch>.qcow2.sha256`
 
-# 创建模板
-./pve-create-template.sh debian12 amd64 9000
-
-# 创建更多模板
-./pve-create-template.sh ubuntu2404 amd64 9001
-./pve-create-template.sh rocky10 amd64 9002
-```
-
-## PVE 脚本详细用法
-
-### 基本用法
+## 在 PVE 创建模板
 
 ```bash
-./pve-create-template.sh <os> <arch> <vmid> [options]
+# 在 PVE 主机执行
+./scripts/pve-create-template.sh debian13 amd64 9011 \
+  --storage hdd-pool \
+  --release latest
 ```
 
-### 参数
+常见参数：
 
-| 参数 | 说明 | 示例 |
-|:---|:---|:---|
-| `os` | 操作系统名称 | `debian12`, `ubuntu2404` |
-| `arch` | 架构 | `amd64`, `arm64` |
-| `vmid` | VM ID (数字) | `9000` |
+- `--release <tag>`: 选择 Release 版本（默认 `latest`）
+- `--repo <owner/repo>`: 默认 `gclm/vm-images`
+- `--image-url <url>`: 直接指定 qcow2 下载链接
+- `--sshkey-file <path>`: 可选，给模板预置 key（通常建议在克隆实例阶段再设置）
+- `--cicustom user=...`: 可选，不建议与 GUI `ciuser/sshkeys` 混用
 
-### 选项
+## 推荐实例化流程（PVE GUI）
 
-| 选项 | 说明 | 默认值 |
-|:---|:---|:---|
-| `--storage` | 存储名称 | `local-lvm` |
-| `--bridge` | 网桥名称 | `vmbr0` |
-| `--memory` | 内存 (MB) | `2048` |
-| `--cores` | CPU 核心数 | `2` |
-| `--disk-size` | 磁盘大小 | `10G` |
-| `--release` | GitHub Release 版本 | `latest` |
-| `--no-template` | 不转换为模板 | - |
-| `--skip-download` | 使用已下载的文件 | - |
+1. 从模板克隆 VM。
+2. 打开克隆机的 `Cloud-Init` 页面。
+3. 配置：
+   - `User` (`ciuser`)
+   - `SSH public key` (`sshkeys`)
+   - `IP config` (`ipconfig0`)
+4. 启动克隆机，cloud-init 在首次启动时应用配置。
 
-### 示例
+## 配置文件
 
-```bash
-# 基本用法
-./pve-create-template.sh debian12 amd64 9000
+镜像基础定制位于 `images/<os>/config.yaml`，包含：
 
-# 自定义配置
-./pve-create-template.sh ubuntu2404 amd64 9001 \
-    --storage local-zfs \
-    --memory 4096 \
-    --cores 4 \
-    --disk-size 20G
+- 源镜像地址
+- 磁盘大小
+- 时区/主机名/locale
+- 需要预装的软件包
+- 写入的静态文件
+- 首次构建时执行的命令
 
-# 使用指定版本
-./pve-create-template.sh debian12 amd64 9000 --release v1.0.0
-
-# 创建 VM 但不转换为模板（用于调试）
-./pve-create-template.sh debian12 amd64 9002 --no-template
-```
-
-## 配置说明
-
-编辑 `images/<os>/config.yaml` 自定义镜像配置：
-
-```yaml
-name: debian12-base
-version: "1.0.0"
-
-settings:
-  timezone: Asia/Shanghai
-  hostname: debian12
-
-packages:
-  - vim
-  - curl
-  - wget
-  - git
-  - htop
-
-users:
-  - name: debian
-    password_env: ROOT_PASSWORD
-    ssh_key_env: SSH_PUBLIC_KEY
-
-files:
-  - path: /etc/motd
-    content: |
-      Welcome to Debian 12!
-    permissions: "0644"
-
-commands:
-  - systemctl enable qemu-guest-agent
-```
+不包含实例级认证信息（账号/密码/SSH key）。
 
 ## 目录结构
 
-```
+```text
 iso/
-├── .github/workflows/
-│   └── build-cloudinit.yml    # CI 工作流
+├── .github/workflows/build-qcow2.yml
 ├── images/
 │   ├── debian12/config.yaml
 │   ├── debian13/config.yaml
@@ -163,31 +95,7 @@ iso/
 │   ├── ubuntu2404/config.yaml
 │   └── rocky10/config.yaml
 ├── scripts/
-│   ├── generate-cloud-init.sh # 生成 cloud-init ISO
-│   └── pve-create-template.sh # PVE 一键脚本
+│   ├── build-image.sh
+│   └── pve-create-template.sh
 └── README.md
 ```
-
-## 手动发布 Release
-
-1. 进入 Actions → Build Cloud-Init ISO → Run workflow
-2. 填写版本号（如 `v1.0.0`）
-3. CI 会自动创建 tag 和 release
-
-## 常见问题
-
-### Q: cloud-init 配置什么时候应用？
-
-A: VM 首次启动时。cloud-init 通过 `instance-id` 判断是否首次启动，重启不会重复执行。
-
-### Q: 如何修改已有模板的配置？
-
-A: 需要重新生成 cloud-init ISO（在 CI 中修改 config.yaml），然后在 PVE 上重新创建模板。
-
-### Q: 支持哪些 PVE 版本？
-
-A: PVE 7.x 和 8.x 均支持。
-
-## License
-
-MIT

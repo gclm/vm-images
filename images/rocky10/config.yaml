@@ -13,7 +13,7 @@ disk:
 settings:
   timezone: Asia/Shanghai
   locale: en_US.UTF-8
-  hostname: rocky10
+  hostname: rocky
 
 dnf:
   mirror: https://mirrors.tuna.tsinghua.edu.cn/rocky
@@ -36,18 +36,6 @@ packages:
   - nmap-ncat
   - ethtool
   - iptables
-
-users:
-  - name: root
-    password_env: ROOT_PASSWORD
-  - name: rocky
-    password_env: ROOT_PASSWORD
-    sudo: NOPASSWD:ALL
-    ssh_key_env: SSH_PUBLIC_KEY
-
-ssh:
-  password_auth: true
-  root_login: true
 
 files:
   - path: /etc/motd

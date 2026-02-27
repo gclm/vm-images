@@ -13,7 +13,7 @@ disk:
 settings:
   timezone: Asia/Shanghai
   locale: en_US.UTF-8
-  hostname: ubuntu2204
+  hostname: ubuntu
 
 apt:
   mirror: https://mirrors.tuna.tsinghua.edu.cn/ubuntu
@@ -39,18 +39,6 @@ packages:
   - netcat-openbsd
   - ethtool
   - iptables
-
-users:
-  - name: root
-    password_env: ROOT_PASSWORD
-  - name: ubuntu
-    password_env: ROOT_PASSWORD
-    sudo: NOPASSWD:ALL
-    ssh_key_env: SSH_PUBLIC_KEY
-
-ssh:
-  password_auth: true
-  root_login: true
 
 files:
   - path: /etc/motd

@@ -1,67 +1,66 @@
-name: Build Cloud-Init ISO
+name: Build QCOW2 Images
 
 on:
   push:
     branches: [main]
     paths:
       - 'images/**/config.yaml'
-      - 'scripts/**'
-      - '.github/workflows/build-cloudinit.yml'
+      - 'scripts/build-image.sh'
+      - '.github/workflows/build-qcow2.yml'
   pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
       image:
-        description: 'Image to build (e.g., debian12, all)'
+        description: 'Image to build (e.g., debian13, all)'
         required: true
         default: 'all'
+      arch:
+        description: 'Architecture (amd64 or arm64)'
+        required: true
+        default: 'amd64'
       version:
-        description: 'Version tag (e.g., v1.0.0, leave empty for no release)'
+        description: 'Release tag (e.g., v1.0.0). Empty means no release.'
         required: false
         default: ''
 
 permissions:
   contents: write
 
-env:
-  SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
-  ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
-
 jobs:
   detect:
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.detect.outputs.images }}
+      arch: ${{ steps.detect.outputs.arch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
 
       - name: Detect images
         id: detect
         env:
           INPUT_IMAGE: ${{ github.event.inputs.image }}
+          INPUT_ARCH: ${{ github.event.inputs.arch }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$INPUT_IMAGE" != "all" ] && [ -n "$INPUT_IMAGE" ]; then
             images="$INPUT_IMAGE"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            images="debian12"
           else
             images=$(find images -name "config.yaml" -exec dirname {} \; | xargs -I {} basename {} | sort -u | tr '\n' ' ')
           fi
 
-          echo "Images: $images"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_ARCH" ]; then
+            arch="$INPUT_ARCH"
+          else
+            arch="amd64"
+          fi
 
-          # 生成 JSON 数组 (压缩为单行)
           images_json=$(echo "$images" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s -c .)
-          echo "images=$images_json" >> $GITHUB_OUTPUT
-          echo "Detected: $images_json"
+          echo "images=$images_json" >> "$GITHUB_OUTPUT"
+          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+
+          echo "Images: $images_json"
+          echo "Arch: $arch"
 
   build:
     needs: detect
@@ -74,42 +73,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install build tools
         run: |
-          sudo apt update
-          sudo apt install -y genisoimage openssl jq
+          sudo apt-get update
+          sudo apt-get install -y qemu-utils libguestfs-tools jq wget
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Check secrets
+      - name: Relax kernel image permissions for libguestfs (CI only)
         run: |
-          if [ -z "$SSH_PUBLIC_KEY" ]; then
-            echo "Error: SSH_PUBLIC_KEY secret is not set"
-            exit 1
-          fi
-          if [ -z "$ROOT_PASSWORD" ]; then
-            echo "Error: ROOT_PASSWORD secret is not set"
-            exit 1
-          fi
-          echo "Secrets verified"
+          # Some environments require readable host kernel image for appliance launch.
+          sudo dpkg-statoverride --update --add root root 0644 /boot/vmlinuz-$(uname -r) || true
 
-      - name: Generate cloud-init ISO
+      - name: Build image
         env:
           BUILD_IMAGE: ${{ matrix.image }}
+          BUILD_ARCH: ${{ needs.detect.outputs.arch }}
         run: |
-          chmod +x scripts/generate-cloud-init.sh
-          ./scripts/generate-cloud-init.sh "$BUILD_IMAGE" ./output
+          ./scripts/build-image.sh "$BUILD_IMAGE" "$BUILD_ARCH" ./output
 
-      - name: List output files
+      - name: List artifacts
         run: ls -lh output/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.image }}-cloudinit
+          name: ${{ matrix.image }}-${{ needs.detect.outputs.arch }}-qcow2
           path: |
-            output/*-cloudinit.iso
-            output/*-cloudinit.iso.sha256
+            output/*.qcow2
+            output/*.qcow2.sha256
           retention-days: 90
 
   release:
@@ -126,8 +118,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
+          git tag -a "$VERSION" -m "Release $VERSION" || true
+          git push origin "$VERSION" || true
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -137,12 +129,12 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -name "*.iso" -exec cp {} release/ \;
+          find artifacts -name "*.qcow2" -exec cp {} release/ \;
           find artifacts -name "*.sha256" -exec cp {} release/ \;
           ls -lh release/
 
       - name: Create release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
           files: release/*
