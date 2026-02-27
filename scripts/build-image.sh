@@ -77,6 +77,7 @@ read_config() {
     HOSTNAME=$(yq '.settings.hostname // "cloud-template"' "$CONFIG_PATH")
     LOCALE=$(yq '.settings.locale // "en_US.UTF-8"' "$CONFIG_PATH")
     APT_MIRROR=$(yq '.apt.mirror // ""' "$CONFIG_PATH")
+    APT_SECURITY=$(yq '.apt.security // ""' "$CONFIG_PATH")
     DNF_MIRROR=$(yq '.dnf.mirror // ""' "$CONFIG_PATH")
 
     if [ "$SOURCE_URL" = "null" ] || [ -z "$SOURCE_URL" ]; then
@@ -86,8 +87,13 @@ read_config() {
 
     if [[ "$SOURCE_URL" == *"rocky"* ]] || [[ "$SOURCE_URL" == *"centos"* ]] || [[ "$SOURCE_URL" == *"rhel"* ]]; then
         OS_FAMILY="rhel"
+        DISTRO="rocky"
+    elif [[ "$SOURCE_URL" == *"cloud-images.ubuntu.com"* ]]; then
+        OS_FAMILY="debian"
+        DISTRO="ubuntu"
     else
         OS_FAMILY="debian"
+        DISTRO="debian"
     fi
 }
 
@@ -123,23 +129,11 @@ build_image() {
 
     if [ "$OS_FAMILY" = "debian" ]; then
         customize_args+=("--run-command" "echo 'LANG=${LOCALE}' > /etc/default/locale || true")
-        if [ -n "$APT_MIRROR" ] && [ "$APT_MIRROR" != "null" ]; then
-            local codename
-            codename=$(echo "$SOURCE_URL" | sed -n 's#.*/images/cloud/\([^/]*\)/.*#\1#p')
-            codename="${codename:-bookworm}"
-            customize_args+=(
-                "--run-command" "rm -f /etc/apt/sources.list.d/*.sources 2>/dev/null || true"
-                "--run-command" "echo 'deb ${APT_MIRROR} ${codename} main contrib non-free non-free-firmware' > /etc/apt/sources.list"
-                "--run-command" "echo 'deb ${APT_MIRROR} ${codename}-updates main contrib non-free non-free-firmware' >> /etc/apt/sources.list"
-                "--run-command" "echo 'deb ${APT_MIRROR}-security ${codename}-security main contrib non-free non-free-firmware' >> /etc/apt/sources.list"
-                "--run-command" "apt-get update || true"
-            )
-        fi
+        # 安装前刷新官方源索引。
+        customize_args+=("--run-command" "apt-get update")
     else
-        if [ -n "$DNF_MIRROR" ] && [ "$DNF_MIRROR" != "null" ]; then
-            customize_args+=("--run-command" "sed -i 's|https://dl.rockylinux.org|${DNF_MIRROR}|g' /etc/yum.repos.d/*.repo 2>/dev/null || true")
-        fi
-        customize_args+=("--run-command" "dnf clean all || true")
+        # 安装前清理 DNF 元数据缓存，确保使用官方源最新元数据。
+        customize_args+=("--run-command" "dnf clean all")
     fi
 
     # 安装软件包
@@ -147,6 +141,38 @@ build_image() {
     packages=$(yq '.packages[]' "$CONFIG_PATH" 2>/dev/null | paste -sd, - || true)
     if [ -n "$packages" ]; then
         customize_args+=("--install" "$packages")
+    fi
+
+    # 先用官方源安装软件，最后再切换到自定义镜像源，兼顾 CI 可用性与产物默认源。
+    if [ "$OS_FAMILY" = "debian" ] && [ -n "$APT_MIRROR" ] && [ "$APT_MIRROR" != "null" ]; then
+        local codename security_mirror
+        codename=""
+        if [ "$DISTRO" = "debian" ]; then
+            codename=$(echo "$SOURCE_URL" | sed -n 's#.*/images/cloud/\([^/]*\)/.*#\1#p')
+            codename="${codename:-bookworm}"
+            security_mirror="${APT_SECURITY:-${APT_MIRROR}-security}"
+            customize_args+=(
+                "--run-command" "rm -f /etc/apt/sources.list.d/*.sources 2>/dev/null || true"
+                "--run-command" "echo 'deb ${APT_MIRROR} ${codename} main contrib non-free non-free-firmware' > /etc/apt/sources.list"
+                "--run-command" "echo 'deb ${APT_MIRROR} ${codename}-updates main contrib non-free non-free-firmware' >> /etc/apt/sources.list"
+                "--run-command" "echo 'deb ${security_mirror} ${codename}-security main contrib non-free non-free-firmware' >> /etc/apt/sources.list"
+            )
+        else
+            codename=$(echo "$SOURCE_URL" | sed -n 's#https://cloud-images\.ubuntu\.com/\([^/]*\)/.*#\1#p')
+            codename="${codename:-noble}"
+            security_mirror="${APT_SECURITY:-$APT_MIRROR}"
+            customize_args+=(
+                "--run-command" "rm -f /etc/apt/sources.list.d/*.sources 2>/dev/null || true"
+                "--run-command" "echo 'deb ${APT_MIRROR} ${codename} main restricted universe multiverse' > /etc/apt/sources.list"
+                "--run-command" "echo 'deb ${APT_MIRROR} ${codename}-updates main restricted universe multiverse' >> /etc/apt/sources.list"
+                "--run-command" "echo 'deb ${APT_MIRROR} ${codename}-backports main restricted universe multiverse' >> /etc/apt/sources.list"
+                "--run-command" "echo 'deb ${security_mirror} ${codename}-security main restricted universe multiverse' >> /etc/apt/sources.list"
+            )
+        fi
+    fi
+
+    if [ "$OS_FAMILY" = "rhel" ] && [ -n "$DNF_MIRROR" ] && [ "$DNF_MIRROR" != "null" ]; then
+        customize_args+=("--run-command" "sed -i 's|https://dl.rockylinux.org|${DNF_MIRROR}|g' /etc/yum.repos.d/*.repo 2>/dev/null || true")
     fi
 
     # 写入文件
