@@ -87,7 +87,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-utils libguestfs-tools qemu-system-arm qemu-efi-aarch64 jq wget
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          arch="$(uname -m)"
+          case "$arch" in
+            x86_64) yq_arch="amd64" ;;
+            aarch64|arm64) yq_arch="arm64" ;;
+            *)
+              echo "Unsupported runner architecture for yq: $arch"
+              exit 1
+              ;;
+          esac
+          sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${yq_arch}"
           sudo chmod +x /usr/local/bin/yq
 
       - name: Disable passt on GitHub runner (libguestfs fallback to slirp)
