@@ -80,6 +80,14 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      - name: Disable passt on GitHub runner (libguestfs fallback to slirp)
+        run: |
+          # On hosted Ubuntu runners, passt can fail under AppArmor/userns restrictions.
+          # Removing passt lets libguestfs automatically fall back to slirp networking.
+          if dpkg -s passt >/dev/null 2>&1; then
+            sudo apt-get remove -y passt
+          fi
+
       - name: Relax kernel image permissions for libguestfs (CI only)
         run: |
           # Some environments require readable host kernel image for appliance launch.
