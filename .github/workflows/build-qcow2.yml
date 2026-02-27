@@ -7,6 +7,7 @@ on:
       - 'images/**/config.yaml'
       - 'scripts/build-image.sh'
       - '.github/workflows/build-qcow2.yml'
+      - 'cliff.toml'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -72,7 +73,7 @@ jobs:
 
   build:
     needs: detect
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     strategy:
       fail-fast: false
       matrix:
@@ -130,6 +131,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Create and push tag
         run: |
@@ -150,11 +154,25 @@ jobs:
           find artifacts -name "*.sha256" -exec cp {} release/ \;
           ls -lh release/
 
+      - name: Generate changelog from commits
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Show release notes
+        run: cat RELEASE_NOTES.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION }}
           files: release/*
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
