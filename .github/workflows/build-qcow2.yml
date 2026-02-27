@@ -16,9 +16,9 @@ on:
         required: true
         default: 'all'
       arch:
-        description: 'Architecture (amd64 or arm64)'
+        description: 'Architecture (amd64, arm64, or all)'
         required: true
-        default: 'amd64'
+        default: 'all'
       version:
         description: 'Release tag (e.g., v1.0.0). Empty means no release.'
         required: false
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       images: ${{ steps.detect.outputs.images }}
-      arch: ${{ steps.detect.outputs.arch }}
+      archs: ${{ steps.detect.outputs.archs }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,17 +50,25 @@ jobs:
           fi
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_ARCH" ]; then
-            arch="$INPUT_ARCH"
+            if [ "$INPUT_ARCH" = "all" ]; then
+              archs="amd64 arm64"
+            elif [ "$INPUT_ARCH" = "amd64" ] || [ "$INPUT_ARCH" = "arm64" ]; then
+              archs="$INPUT_ARCH"
+            else
+              echo "Unsupported arch input: $INPUT_ARCH"
+              exit 1
+            fi
           else
-            arch="amd64"
+            archs="amd64 arm64"
           fi
 
+          archs_json=$(echo "$archs" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s -c .)
           images_json=$(echo "$images" | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s -c .)
           echo "images=$images_json" >> "$GITHUB_OUTPUT"
-          echo "arch=$arch" >> "$GITHUB_OUTPUT"
+          echo "archs=$archs_json" >> "$GITHUB_OUTPUT"
 
           echo "Images: $images_json"
-          echo "Arch: $arch"
+          echo "Archs: $archs_json"
 
   build:
     needs: detect
@@ -69,6 +77,7 @@ jobs:
       fail-fast: false
       matrix:
         image: ${{ fromJson(needs.detect.outputs.images) }}
+        arch: ${{ fromJson(needs.detect.outputs.archs) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,7 +85,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-utils libguestfs-tools jq wget
+          sudo apt-get install -y qemu-utils libguestfs-tools qemu-system-arm qemu-efi-aarch64 jq wget
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
@@ -96,7 +105,7 @@ jobs:
       - name: Build image
         env:
           BUILD_IMAGE: ${{ matrix.image }}
-          BUILD_ARCH: ${{ needs.detect.outputs.arch }}
+          BUILD_ARCH: ${{ matrix.arch }}
         run: |
           ./scripts/build-image.sh "$BUILD_IMAGE" "$BUILD_ARCH" ./output
 
@@ -106,7 +115,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.image }}-${{ needs.detect.outputs.arch }}-qcow2
+          name: ${{ matrix.image }}-${{ matrix.arch }}-qcow2
           path: |
             output/*.qcow2
             output/*.qcow2.sha256
